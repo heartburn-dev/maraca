@@ -55,8 +55,11 @@
     <Prefer32Bit>true</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="DInvoke.Data">
+      <HintPath>..\DInvoke.Data.dll</HintPath>
+    </Reference>
     <Reference Include="DInvoke.DynamicInvoke">
-      <HintPath>..\..\..\..\DInvoke.DynamicInvoke.dll</HintPath>
+      <HintPath>..\DInvoke.DynamicInvoke.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
