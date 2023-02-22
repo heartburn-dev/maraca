@@ -55,11 +55,8 @@
     <Prefer32Bit>true</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="DInvoke.Data">
-      <HintPath>..\DInvoke.Data.dll</HintPath>
-    </Reference>
-    <Reference Include="DInvoke.DynamicInvoke">
-      <HintPath>..\DInvoke.DynamicInvoke.dll</HintPath>
+    <Reference Include="DInvoke, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\DInvoke.1.0.4\lib\net35\DInvoke.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -71,6 +68,9 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ManualMapping.cs" />
+    <Compile Include="SyscallInvoke.cs" />
+    <Compile Include="DynamicInvoke.cs" />
     <Compile Include="Win32.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
