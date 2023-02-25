@@ -6,6 +6,14 @@ namespace Hollow
     {
         static void Main(String[] args)
         {
+            Console.WriteLine(@"
+.------..------..------..------..------..------.
+|M.--. ||A.--. ||R.--. ||A.--. ||C.--. ||A.--. | Shaky
+| (\/) || (\/) || :(): || (\/) || :/\: || (\/) |    Shaky
+| :\/: || :\/: || ()() || :\/: || :\/: || :\/: |        Baby 
+| '--'M|| '--'A|| '--'R|| '--'A|| '--'C|| '--'A|           *music*
+`------'`------'`------'`------'`------'`------'
+");
 
             string k = "flareon223";
             // Place encrypted shellcode here
